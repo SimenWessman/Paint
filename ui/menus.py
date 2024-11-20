@@ -3,7 +3,7 @@ from PyQt5 import QtGui
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QInputDialog, QMessageBox, QApplication, QColorDialog, QScrollArea
 from PyQt5.QtWidgets import QMainWindow, QAction, QFileDialog, QMenuBar, QVBoxLayout, QWidget, QLabel
-from PyQt5.QtGui import QPixmap, QImage, QTransform, QPainter  # Corrected import
+from PyQt5.QtGui import QPixmap, QImage, QTransform, QPainter, QKeySequence  # Corrected import
 from ui.canvas import Canvas
 
 
@@ -28,6 +28,12 @@ class PhotoEditor(QMainWindow):
 
         # Set scroll area as the central widget
         self.setCentralWidget(self.scroll_area)
+
+        # Create keyboard shortcut for paste
+        paste_shortcut = QAction("Paste", self)
+        paste_shortcut.setShortcut(QKeySequence.Paste)
+        paste_shortcut.triggered.connect(lambda: self.canvas.paste_selection(self.canvas.last_click_position))
+        self.addAction(paste_shortcut)
 
         # Set up menus
         self.create_menus()

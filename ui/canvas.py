@@ -27,6 +27,8 @@ class Canvas(QWidget):
         self.is_moving_selection = False  # Flag for moving selection
         self.selection_offset = QPoint()  # Offset during selection movement
 
+        self.last_click_position = None  # Initialize last click position
+
         # Drawing variables
         self.drawing = False
         self.last_point = QPoint()
@@ -83,11 +85,35 @@ class Canvas(QWidget):
             self.status_message.emit("Clipboard is empty.")
             return
 
-        paste_position = position or QPoint(0, 0)
+        # Default to rect tool for proper pasting
+        self.set_tool('rect')
+
+        # Use the provided position or last click position, fallback to center
+        if position:
+            paste_position = self.map_to_scaled_image(position)
+        elif self.last_click_position:
+            paste_position = self.last_click_position
+        else:
+            paste_position = QPoint(
+                (self.original_image.width() - clipboard_image.width()) // 2,
+                (self.original_image.height() - clipboard_image.height()) // 2,
+            )
+
+        # Adjust pasted image position to center within the bounding rectangle
+        bounding_rect = clipboard_image.rect()
+        paste_position.setX(paste_position.x() - bounding_rect.width() // 2)
+        paste_position.setY(paste_position.y() - bounding_rect.height() // 2)
+
+        # Ensure position is within bounds
+        paste_position.setX(max(0, paste_position.x()))
+        paste_position.setY(max(0, paste_position.y()))
+
+        # Paste the image onto the canvas
         painter = QPainter(self.original_image)
         painter.drawImage(paste_position, clipboard_image)
         painter.end()
 
+        # Update the displayed image
         self.image = self.original_image.scaled(
             int(self.original_image.width() * self.current_scale),
             int(self.original_image.height() * self.current_scale),
@@ -95,7 +121,7 @@ class Canvas(QWidget):
             Qt.SmoothTransformation,
         )
 
-        # Create rectangular selection for pasted image
+        # Update the selection path to fit the pasted content
         self.selection_start = paste_position
         self.selection_path = [
             paste_position,
@@ -104,7 +130,7 @@ class Canvas(QWidget):
         self.selected_area = clipboard_image
 
         self.update()
-        self.status_message.emit("Image pasted with selection.")
+        self.status_message.emit(f"Pasted content at {paste_position.x()}, {paste_position.y()}")
 
     def set_brush_color(self, color):
         """Set the brush color."""
@@ -162,10 +188,17 @@ class Canvas(QWidget):
             canvas_painter.setPen(pen)
             scaled_path = [self.map_from_scaled_image(point) for point in self.selection_path]
 
-            if self.tool == 'rect' and len(self.selection_path) == 2:
+            if self.tool == 'polygon':
+                # Draw the polygon lines dynamically
+                for i in range(len(scaled_path) - 1):
+                    canvas_painter.drawLine(scaled_path[i], scaled_path[i + 1])
+                # Draw a closing line to the first point if polygon is being previewed
+                if self.drawing_selection:
+                    canvas_painter.drawLine(scaled_path[-1], scaled_path[0])
+            elif self.tool == 'rect' and len(self.selection_path) == 2:
                 rect = QRect(scaled_path[0], scaled_path[1])
                 canvas_painter.drawRect(rect)
-            elif self.tool in ['lasso', 'polygon']:
+            elif self.tool == 'lasso':
                 poly = QPolygon(scaled_path)
                 canvas_painter.drawPolyline(poly)
 
@@ -181,34 +214,62 @@ class Canvas(QWidget):
         self.update()
 
     def finalize_selection(self):
-        """Finalize the selection without scaling issues."""
-        if self.selection_path:
+        """Finalize the selection and apply any masking if necessary."""
+        if self.tool == 'polygon' and len(self.selection_path) > 2:
+            # Ensure the polygon is closed
+            if self.selection_path[0] != self.selection_path[-1]:
+                self.selection_path.append(self.selection_path[0])
+
+            # Create a mask for the polygon selection
+            mask = QImage(self.image.size(), QImage.Format_ARGB32)
+            mask.fill(Qt.transparent)
+
+            path = QPainterPath()
+            polygon = QPolygonF(self.selection_path)
+            path.addPolygon(polygon)
+
+            # Draw the polygon onto the mask
+            mask_painter = QPainter(mask)
+            mask_painter.fillPath(path, QColor(255, 255, 255, 255))  # White inside the polygon
+            mask_painter.end()
+
+            # Apply the mask to the image
+            self.selected_area = QImage(self.image.size(), QImage.Format_ARGB32)
+            self.selected_area.fill(Qt.transparent)
+
+            painter = QPainter(self.selected_area)
+            painter.setCompositionMode(QPainter.CompositionMode_Source)
+            painter.drawImage(0, 0, self.image)
+            painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+            painter.drawImage(0, 0, mask)
+            painter.end()
+
+            self.status_message.emit("Polygon selection finalized.")
+
+        elif self.selection_path and self.tool in ['lasso', 'rect']:
             self.selection_path = [
                 self.map_to_scaled_image(point) for point in self.selection_path
             ]
             self.extract_selection()
+
+        # Reset path and stop drawing
+        self.drawing_selection = False
         self.update()
 
     def mousePressEvent(self, event):
         """Handle mouse press for both drawing and selection tools."""
-        pos = self.map_to_scaled_image(event.pos())  # Use map_to_scaled_image instead
+        pos = self.map_to_scaled_image(event.pos())
 
         if pos.x() != -1 and pos.y() != -1:
-            if self.selected_area and self.get_selection_rect().contains(pos):
-                # Start moving the selection
-                self.is_moving_selection = True
-                self.selection_offset = pos - self.selection_start
-            else:
-                # Clear selection if clicked outside
-                self.is_moving_selection = False
-                self.selection_start = None
-                self.selection_path = []
-                self.selected_area = None
-
-            if self.tool == 'rect':
+            if self.tool == 'polygon':
+                # Add the clicked point to the selection path
+                self.selection_path.append(pos)
+                self.drawing_selection = True
+                self.update()
+            elif self.tool == 'rect':
                 self.selection_start = pos
                 self.selection_path = [pos]
-            elif self.tool in ['lasso', 'polygon']:
+            elif self.tool == 'lasso':
                 if not self.drawing_selection:
                     self.selection_path = [pos]
                 self.drawing_selection = True
@@ -267,9 +328,13 @@ class Canvas(QWidget):
         """Handle mouse release for selection tools."""
         if self.is_moving_selection:
             self.is_moving_selection = False
-        elif self.tool in ['rect', 'lasso', 'polygon']:
+        elif self.tool in ['rect', 'lasso']:
             self.drawing_selection = False
             self.finalize_selection()
+
+        elif self.tool == 'polygon':
+            self.drawing_selection = True
+            self.update()
         elif self.tool == 'erase' or self.tool is None:
             self.drawing = False
         self.update()
@@ -320,24 +385,15 @@ class Canvas(QWidget):
 
         # Handle lasso/polygon selection
         if self.tool in ['lasso', 'polygon']:
-            mask = QImage(self.original_image.size(), QImage.Format_ARGB32)
-            mask.fill(Qt.transparent)
-            painter = QPainter(mask)
-            path = QPainterPath()
-            path.addPolygon(QPolygonF(self.selection_path))
-            painter.fillPath(path, Qt.white)
-            painter.end()
+            # Calculate the bounding rectangle of the selection
+            polygon = QPolygonF(self.selection_path)
+            bounding_rect = polygon.boundingRect()
 
-            self.selected_area = QImage(self.original_image.size(), QImage.Format_ARGB32)
-            self.selected_area.fill(Qt.transparent)
-            painter = QPainter(self.selected_area)
-            painter.setCompositionMode(QPainter.CompositionMode_Source)
-            painter.drawImage(0, 0, self.original_image)
-            painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-            painter.drawImage(0, 0, mask)
-            painter.end()
-
-        # Handle rectangular selection
+            # Crop the image to the bounding rectangle
+            self.selected_area = self.original_image.copy(
+                int(bounding_rect.left()), int(bounding_rect.top()),
+                int(bounding_rect.width()), int(bounding_rect.height())
+            )
         elif self.tool == 'rect' and self.selection_start:
             rect = self.get_selection_rect()
             if rect.isValid():
@@ -412,5 +468,15 @@ class Canvas(QWidget):
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation
                 )
+                self.update()
+
+    def keyPressEvent(self, event):
+        """Handle key press for closing the polygon selection."""
+        if self.tool == 'polygon' and len(self.selection_path) > 2:
+            if event.key() == Qt.Key_Return:
+                # Close the polygon by connecting the last point to the first
+                self.selection_path.append(self.selection_path[0])  # Complete the polygon
+                self.finalize_selection()
+                self.drawing_selection = False
                 self.update()
 
