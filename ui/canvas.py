@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtGui import QPainter, QPen, QColor, QImage, QPolygon, QPainterPath, QPolygonF
+from PyQt5.QtGui import QPainter, QPen, QColor, QImage, QPolygon, QPainterPath, QPolygonF, QBrush
 from PyQt5.QtCore import Qt, QPoint, QRect, QEvent, pyqtSignal
 
 
@@ -36,7 +36,33 @@ class Canvas(QWidget):
         self.brush_size = 3
         self.eraser_size = 10  # Default eraser size
 
+        self.brush_texture = None  # Default is no texture
+        self.textures = {
+            "None": None,
+            "Dots": Qt.Dense5Pattern,
+            "Stripes": Qt.Dense3Pattern,
+            "Checkerboard": Qt.CrossPattern,
+            "Horizontal Lines": Qt.HorPattern,
+            "Vertical Lines": Qt.VerPattern,
+        }
+
         self.grabGesture(Qt.PinchGesture)
+
+    def set_brush_texture(self, texture_name):
+        """Set the texture for the brush."""
+        self.brush_texture = self.textures.get(texture_name, None)
+        self.status_message.emit(f"Brush texture set to: {texture_name}")
+        self.update()
+
+    def set_brush_color(self, color):
+        """Set the brush color."""
+        self.brush_color = QColor(color)
+        self.update()  # Update the canvas to reflect any changes if necessary
+
+    def set_brush_size(self, size):
+        """Set the brush size."""
+        self.brush_size = size
+        self.update()  # Update the canvas to reflect any changes if necessary
 
     def update_canvas_scale(self):
         """Update the canvas scale and redraw the image."""
@@ -85,28 +111,23 @@ class Canvas(QWidget):
             self.status_message.emit("Clipboard is empty.")
             return
 
-        # Default to rect tool for proper pasting
-        self.set_tool('rect')
+        self.set_tool('rect')  # Set to rectangle tool for proper pasting behavior
 
-        # Use the provided position or last click position, fallback to center
-        if position:
-            paste_position = self.map_to_scaled_image(position)
-        elif self.last_click_position:
-            paste_position = self.last_click_position
-        else:
+        # Use provided position or last clicked position
+
+        # Use provided position or last clicked position
+        paste_position = position or self.last_click_position
+
+        if not paste_position:
+            # Default to center if no position is available
             paste_position = QPoint(
                 (self.original_image.width() - clipboard_image.width()) // 2,
                 (self.original_image.height() - clipboard_image.height()) // 2,
             )
 
-        # Adjust pasted image position to center within the bounding rectangle
-        bounding_rect = clipboard_image.rect()
-        paste_position.setX(paste_position.x() - bounding_rect.width() // 2)
-        paste_position.setY(paste_position.y() - bounding_rect.height() // 2)
-
         # Ensure position is within bounds
-        paste_position.setX(max(0, paste_position.x()))
-        paste_position.setY(max(0, paste_position.y()))
+        paste_position.setX(max(0, min(self.original_image.width() - clipboard_image.width(), paste_position.x())))
+        paste_position.setY(max(0, min(self.original_image.height() - clipboard_image.height(), paste_position.y())))
 
         # Paste the image onto the canvas
         painter = QPainter(self.original_image)
@@ -121,21 +142,17 @@ class Canvas(QWidget):
             Qt.SmoothTransformation,
         )
 
-        # Update the selection path to fit the pasted content
+        # Update selection path to reflect pasted content
         self.selection_start = paste_position
         self.selection_path = [
             paste_position,
             paste_position + QPoint(clipboard_image.width(), clipboard_image.height()),
         ]
         self.selected_area = clipboard_image
+        self.last_click_position = None
 
         self.update()
         self.status_message.emit(f"Pasted content at {paste_position.x()}, {paste_position.y()}")
-
-    def set_brush_color(self, color):
-        """Set the brush color."""
-        self.brush_color = QColor(color)
-        self.update()  # Update the canvas to reflect any changes if necessary
 
     # Test test test
     def draw_rectangle(self, rect: QRect, color: str):
@@ -165,11 +182,6 @@ class Canvas(QWidget):
         painter.setPen(pen)
         painter.drawLine(start, end)
         self.update()
-
-    def set_brush_size(self, size):
-        """Set the brush size."""
-        self.brush_size = size
-        self.update()  # Update the canvas to reflect any changes if necessary
 
     def paintEvent(self, event):
         """Render the image and selection on the canvas."""
@@ -261,6 +273,7 @@ class Canvas(QWidget):
         pos = self.map_to_scaled_image(event.pos())
 
         if pos.x() != -1 and pos.y() != -1:
+            self.last_click_position = pos
             if self.tool == 'polygon':
                 # Add the clicked point to the selection path
                 self.selection_path.append(pos)
@@ -273,7 +286,7 @@ class Canvas(QWidget):
                 if not self.drawing_selection:
                     self.selection_path = [pos]
                 self.drawing_selection = True
-            elif self.tool is None and event.button() == Qt.LeftButton:
+            elif self.tool in ['pencil', 'brush'] and event.button() == Qt.LeftButton:
                 self.drawing = True
                 self.last_point = pos
             elif self.tool == 'erase':
@@ -296,13 +309,30 @@ class Canvas(QWidget):
         elif self.tool in ['lasso', 'polygon'] and self.drawing_selection:
             self.selection_path.append(pos)
             self.update()
-        elif self.tool is None and self.drawing:
+
+        elif self.tool in ['pencil', 'brush'] and self.drawing:
             # Drawing
             painter = QPainter(self.original_image)
-            pen = QPen(self.brush_color, self.brush_size, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.drawLine(self.last_point, pos)
+
+            if self.tool == 'brush':
+                # Use QBrush for the texture
+                brush = QBrush(self.brush_color, self.brush_texture) if self.brush_texture else QBrush(self.brush_color)
+                painter.setBrush(brush)
+                painter.setPen(Qt.NoPen)  # Remove border to focus on texture
+
+                # Draw filled circles for a textured effect
+                rect = QRect(self.last_point.x() - self.brush_size // 2,
+                             self.last_point.y() - self.brush_size // 2,
+                             self.brush_size, self.brush_size)
+                painter.drawEllipse(rect)
+            else:
+                # Pencil uses a basic QPen
+                pen = QPen(self.brush_color, self.brush_size, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.drawLine(self.last_point, pos)
             self.last_point = pos
+            painter.end()
+
             self.image = self.original_image.scaled(
                 int(self.original_image.width() * self.current_scale),
                 int(self.original_image.height() * self.current_scale),
@@ -335,7 +365,7 @@ class Canvas(QWidget):
         elif self.tool == 'polygon':
             self.drawing_selection = True
             self.update()
-        elif self.tool == 'erase' or self.tool is None:
+        elif self.tool in ['pencil', 'brush', 'erase']:
             self.drawing = False
         self.update()
 

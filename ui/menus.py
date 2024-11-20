@@ -35,6 +35,16 @@ class PhotoEditor(QMainWindow):
         paste_shortcut.triggered.connect(lambda: self.canvas.paste_selection(self.canvas.last_click_position))
         self.addAction(paste_shortcut)
 
+        cut_shortcut = QAction("Cut", self)
+        cut_shortcut.setShortcut(QKeySequence.Cut)
+        cut_shortcut.triggered.connect(self.canvas.cut_selection)
+        self.addAction(cut_shortcut)
+
+        copy_shortcut = QAction("Copy", self)
+        copy_shortcut.setShortcut(QKeySequence.Copy)
+        copy_shortcut.triggered.connect(self.canvas.copy_selection)
+        self.addAction(copy_shortcut)
+
         # Set up menus
         self.create_menus()
 
@@ -200,8 +210,30 @@ class PhotoEditor(QMainWindow):
         # Tools Menu
         tools_menu = self.menuBar().addMenu("Tools")
 
+        brush_action = QAction("Brush", self)
+        brush_action.triggered.connect(lambda: self.canvas.set_tool('brush'))
+        tools_menu.addAction(brush_action)
+
+        brush_settings_menu = tools_menu.addMenu("Brush Settings")
+
+        # Brush Texture
+        brush_textures_menu = brush_settings_menu.addMenu("Brush Textures")
+        for texture_name in ["None", "Dots", "Stripes", "Checkerboard", "Horizontal Lines", "Vertical Lines"]:
+            texture_action = QAction(texture_name, self)
+            texture_action.triggered.connect(lambda checked, t=texture_name: self.canvas.set_brush_texture(t))
+            brush_textures_menu.addAction(texture_action)
+
+        # Brush Color and Size
+        brush_color_action = QAction("Brush Color", self)
+        brush_color_action.triggered.connect(self.set_brush_color)
+        tools_menu.addAction(brush_color_action)
+
+        brush_size_action = QAction("Brush Size", self)
+        brush_size_action.triggered.connect(self.set_brush_size)
+        tools_menu.addAction(brush_size_action)
+
         draw_action = QAction("Draw", self)
-        draw_action.triggered.connect(lambda: self.canvas.set_tool(None))
+        draw_action.triggered.connect(lambda: self.canvas.set_tool('pencil'))
         tools_menu.addAction(draw_action)
 
         erase_action = QAction("Erase", self)
