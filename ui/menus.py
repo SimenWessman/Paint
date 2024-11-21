@@ -4,6 +4,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QInputDialog, QMessageBox, QApplication, QColorDialog, QScrollArea
 from PyQt5.QtWidgets import QMainWindow, QAction, QFileDialog, QMenuBar, QVBoxLayout, QWidget, QLabel
 from PyQt5.QtGui import QPixmap, QImage, QTransform, QPainter, QKeySequence  # Corrected import
+from PyQt5.QtWidgets import QFontDialog
 from ui.canvas import Canvas
 
 
@@ -48,7 +49,38 @@ class PhotoEditor(QMainWindow):
         # Set up menus
         self.create_menus()
 
+        self.add_keybindings()
+
         self.show()
+
+    def add_keybindings(self):
+        """Set up keybindings for tool selection."""
+        self.addAction(self.create_key_action("T", lambda: self.canvas.set_tool('text'), "Text Tool"))
+        self.addAction(self.create_key_action("B", lambda: self.canvas.set_tool('brush'), "Brush Tool"))
+        self.addAction(self.create_key_action("P", lambda: self.canvas.set_tool('pencil'), "Pencil Tool"))
+        self.addAction(self.create_key_action("S", self.open_selection_menu, "Select Tool Menu"))
+        self.addAction(self.create_key_action("E", lambda: self.canvas.set_tool('erase'), "Eraser Tool"))
+        self.addAction(self.create_key_action("R", self.reset_zoom, "Reset Zoom"))
+
+    def create_key_action(self, key, action_func, description):
+        """Helper to create a QAction with a shortcut."""
+        action = QAction(self)
+        action.setShortcut(key)
+        action.triggered.connect(action_func)
+        action.setText(description)
+        return action
+
+    def open_selection_menu(self):
+        """Open a selection dialog to choose the selection tool."""
+        options = ["Rectangular Selection", "Free-Form Selection (Lasso)", "Polygon Selection"]
+        tool, ok = QInputDialog.getItem(self, "Select Selection Tool", "Choose a selection tool:", options, 0, False)
+        if ok and tool:
+            if tool == "Rectangular Selection":
+                self.canvas.set_tool('rect')
+            elif tool == "Free-Form Selection (Lasso)":
+                self.canvas.set_tool('lasso')
+            elif tool == "Polygon Selection":
+                self.canvas.set_tool('polygon')
 
     def crop_image(self):
         """Crop the center of the canvas image."""
@@ -207,14 +239,49 @@ class PhotoEditor(QMainWindow):
         flip_horizontal_action.triggered.connect(self.flip_horizontal)
         image_menu.addAction(flip_horizontal_action)
 
+        # Shapes Menu
+        shapes_menu = menu_bar.addMenu("Shapes")
+
+        # List of Shapes
+        list_of_shapes_action = QAction("List of Shapes", self)
+        list_of_shapes_action.triggered.connect(self.select_shape)
+        shapes_menu.addAction(list_of_shapes_action)
+
+        # Outline Color
+        outline_color_action = QAction("Outline Color", self)
+        outline_color_action.triggered.connect(self.set_outline_color)
+        shapes_menu.addAction(outline_color_action)
+
+        # Fill Color
+        fill_color_action = QAction("Fill Color", self)
+        fill_color_action.triggered.connect(self.set_fill_color)
+        shapes_menu.addAction(fill_color_action)
+
+        reset_colors_action = QAction("Reset Colors", self)
+        reset_colors_action.triggered.connect(self.reset_colors)
+        shapes_menu.addAction(reset_colors_action)
+
         # Tools Menu
         tools_menu = self.menuBar().addMenu("Tools")
+
+        filter_brush_size_action = QAction("Filter Brush Size", self)
+        filter_brush_size_action.triggered.connect(self.set_filter_brush_size)
+        tools_menu.addAction(filter_brush_size_action)
+
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.triggered.connect(self.zoom_in)
+        tools_menu.addAction(zoom_in_action)
+
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.triggered.connect(self.zoom_out)
+        tools_menu.addAction(zoom_out_action)
 
         brush_action = QAction("Brush", self)
         brush_action.triggered.connect(lambda: self.canvas.set_tool('brush'))
         tools_menu.addAction(brush_action)
 
         brush_settings_menu = tools_menu.addMenu("Brush Settings")
+
 
         # Brush Texture
         brush_textures_menu = brush_settings_menu.addMenu("Brush Textures")
@@ -244,6 +311,20 @@ class PhotoEditor(QMainWindow):
         eraser_size_action = QAction("Eraser Size", self)
         eraser_size_action.triggered.connect(self.set_eraser_size)
         tools_menu.addAction(eraser_size_action)
+
+        text_tool_action = QAction("Text Tool", self)
+        text_tool_action.triggered.connect(self.enable_text_tool)
+        tools_menu.addAction(text_tool_action)
+
+        # Font Picker
+        font_action = QAction("Select Font", self)
+        font_action.triggered.connect(self.select_text_font)
+        tools_menu.addAction(font_action)
+
+        # Text Color Picker
+        text_color_action = QAction("Select Text Color", self)
+        text_color_action.triggered.connect(self.select_text_color)
+        tools_menu.addAction(text_color_action)
 
         # Other tools like selection
         select_menu = tools_menu.addMenu("Select")
@@ -279,11 +360,6 @@ class PhotoEditor(QMainWindow):
         reset_zoom_action.triggered.connect(self.reset_zoom)
         tools_menu.addAction(reset_zoom_action)
 
-        # Brush Size
-        brush_size_action = QAction("Brush Size", self)
-        brush_size_action.triggered.connect(self.set_brush_size)
-        tools_menu.addAction(brush_size_action)
-
         # Zoom In
         zoom_in_action = QAction("Zoom In", self)
         zoom_in_action.triggered.connect(self.zoom_in)
@@ -301,10 +377,99 @@ class PhotoEditor(QMainWindow):
         brush_color_action.triggered.connect(self.set_brush_color)
         colors_menu.addAction(brush_color_action)
 
+        filter_menu = self.menuBar().addMenu("Filters")
+
+        # Add global filters
+        gaussian_action = QAction("Gaussian Filter", self)
+        gaussian_action.triggered.connect(self.canvas.apply_gaussian_filter)
+        filter_menu.addAction(gaussian_action)
+
+        sobel_action = QAction("Sobel Filter", self)
+        sobel_action.triggered.connect(self.canvas.apply_sobel_filter)
+        filter_menu.addAction(sobel_action)
+
+        binary_action = QAction("Binary Filter", self)
+        binary_action.triggered.connect(self.canvas.apply_binary_filter)
+        filter_menu.addAction(binary_action)
+
+        histogram_action = QAction("Histogram Thresholding", self)
+        histogram_action.triggered.connect(self.canvas.apply_histogram_thresholding)
+        filter_menu.addAction(histogram_action)
+
+        brush_filter_menu = filter_menu.addMenu("Brush Filters")
+
+        filter_menu.addSeparator()  # Optional: Add a separator between global and brush filters
+
+        filter_menu.addMenu(brush_filter_menu)  # Add the Brush Filters submenu under Filters
+
+        brush_gaussian_action = QAction("Gaussian Filter Brush", self)
+        brush_gaussian_action.triggered.connect(lambda: [self.canvas.set_tool('filter_brush'),
+                                                         self.canvas.set_brush_filter("gaussian")])
+        brush_filter_menu.addAction(brush_gaussian_action)
+
+        brush_sobel_action = QAction("Sobel Filter Brush", self)
+        brush_sobel_action.triggered.connect(lambda: [self.canvas.set_tool('filter_brush'),
+                                                      self.canvas.set_brush_filter("sobel")])
+        brush_filter_menu.addAction(brush_sobel_action)
+
+        brush_binary_action = QAction("Binary Filter Brush", self)
+        brush_binary_action.triggered.connect(lambda: [self.canvas.set_tool('filter_brush'),
+                                                       self.canvas.set_brush_filter("binary")])
+        brush_filter_menu.addAction(brush_binary_action)
+
+    def reset_colors(self):
+        """Reset the fill and outline colors to default."""
+        self.canvas.reset_colors()
+        self.statusBar().showMessage("Fill and outline colors reset to default.")
+
+    def select_shape(self):
+        """Open a dialog to select a shape."""
+        shapes = ["Rectangle", "Circle", "Triangle", "Line"]
+        shape, ok = QInputDialog.getItem(self, "Select Shape", "Choose a shape:", shapes, 0, False)
+        if ok and shape:
+            self.canvas.set_tool(shape.lower())  # Set the tool to the selected shape
+            self.statusBar().showMessage(f"Selected shape: {shape}")
+
+    def set_outline_color(self):
+        """Set the outline color for shapes."""
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.canvas.set_outline_color(color)
+            self.statusBar().showMessage(f"Outline color set to: {color.name()}")
+
+    def set_fill_color(self):
+        """Set the fill color for shapes."""
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.canvas.set_fill_color(color)
+            self.statusBar().showMessage(f"Fill color set to: {color.name()}")
+
+    def set_filter_brush_size(self):
+        """Set the filter brush size."""
+        size, ok = QInputDialog.getInt(self, "Filter Brush Size", "Enter filter brush size:", min=1, max=50)
+        if ok:
+            self.canvas.set_filter_brush_size(size)
+
     def new_file(self):
         """Clear the canvas for a new file."""
         self.canvas.clear_canvas()
         self.statusBar().showMessage("New file created.")
+
+    def enable_text_tool(self):
+        """Enable the text tool in the canvas."""
+        self.canvas.enable_text_tool()
+
+    def select_text_font(self):
+        """Open a font dialog to select the font for the text tool."""
+        font, ok = QFontDialog.getFont(self.canvas.text_font, self)
+        if ok:
+            self.canvas.set_text_font(font)
+
+    def select_text_color(self):
+        """Open a color dialog to select the color for the text tool."""
+        color = QColorDialog.getColor(self.canvas.text_color, self)
+        if color.isValid():
+            self.canvas.set_text_color(color)
 
     def set_brush_size(self):
         """Set the brush size."""
@@ -327,9 +492,10 @@ class PhotoEditor(QMainWindow):
     def save_file(self):
         """Save the current image."""
         if self.current_file:
-            self.save_image_to_file(self.current_file)
+            self.save_image_to_file(self.current_file)  # Save to the current file
+            self.statusBar().showMessage(f"File updated: {self.current_file}")
         else:
-            self.save_file_as()
+            self.save_file_as()  # Fallback to Save As if no current file is set
 
     def save_file_as(self):
         """Save the current image to a new file."""
@@ -453,16 +619,12 @@ class PhotoEditor(QMainWindow):
         self.canvas.update()
 
     def zoom_in(self):
-        """Zoom in on the canvas."""
-        self.canvas.current_scale *= 1.2
-        self.canvas.update_canvas_scale()
-        self.statusBar().showMessage("Zoomed In")
+        """Trigger zoom in on the canvas."""
+        self.canvas.zoom_in()
 
     def zoom_out(self):
-        """Zoom out on the canvas."""
-        self.canvas.current_scale *= 0.8
-        self.canvas.update_canvas_scale()
-        self.statusBar().showMessage("Zoomed Out")
+        """Trigger zoom out on the canvas."""
+        self.canvas.zoom_out()
 
     def pick_color(self):
         color = QColorDialog.getColor()

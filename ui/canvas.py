@@ -1,6 +1,10 @@
-from PyQt5.QtWidgets import QWidget, QApplication
+import cv2
+import numpy as np
+from PyQt5 import QtGui
+from PyQt5.QtWidgets import QWidget, QApplication, QInputDialog
 from PyQt5.QtGui import QPainter, QPen, QColor, QImage, QPolygon, QPainterPath, QPolygonF, QBrush
 from PyQt5.QtCore import Qt, QPoint, QRect, QEvent, pyqtSignal
+
 
 
 class Canvas(QWidget):
@@ -46,7 +50,203 @@ class Canvas(QWidget):
             "Vertical Lines": Qt.VerPattern,
         }
 
+        self.text_tool_active = False  # Track if the text tool is active
+        self.text_color = Qt.black  # Default text color
+        self.text_font = QtGui.QFont("Arial", 24)  # Default font
+
+        self.filter_brush_size = 10  # Default size for filter brush
+
+        self.current_shape = None
+        self.outline_color = Qt.black
+        self.fill_color = Qt.transparent
+
         self.grabGesture(Qt.PinchGesture)
+
+    def reset_colors(self):
+        """Reset fill and outline colors to default values."""
+        self.outline_color = Qt.black
+        self.fill_color = Qt.transparent
+        self.update()  # Update the canvas if necessary
+
+    def set_outline_color(self, color):
+        """Set the outline color for shapes."""
+        self.outline_color = QColor(color)
+
+    def set_fill_color(self, color):
+        """Set the fill color for shapes."""
+        self.fill_color = QColor(color)
+
+
+
+    def set_filter_brush_size(self, size):
+        """Set the filter brush size."""
+        self.filter_brush_size = size
+        self.update()
+
+    def apply_gaussian_filter(self):
+        """Apply a Gaussian blur to the entire image."""
+        self.status_message.emit("Applying Gaussian Filter...")
+        image_array = self.qimage_to_numpy(self.original_image)
+        blurred = cv2.GaussianBlur(image_array, (15, 15), 0)
+        self.update_image_from_numpy(blurred)
+
+    def apply_sobel_filter(self):
+        """Apply a Sobel filter to the entire image."""
+        self.status_message.emit("Applying Sobel Filter...")
+        image_array = self.qimage_to_numpy(self.original_image)
+        gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_combined = cv2.magnitude(sobelx, sobely)
+        sobel_combined = np.uint8(255 * sobel_combined / np.max(sobel_combined))  # Normalize to 8-bit
+        sobel_colored = cv2.cvtColor(sobel_combined, cv2.COLOR_GRAY2BGR)  # Convert back to 3 channels
+        self.update_image_from_numpy(sobel_colored)
+
+    def apply_binary_filter(self, threshold=None):
+        """Apply binary thresholding to the image."""
+        self.status_message.emit("Applying Binary Filter...")
+
+        # Convert the image to a numpy array
+        image_array = self.qimage_to_numpy(self.original_image)
+
+        # Convert to grayscale
+        if image_array.ndim == 3 and image_array.shape[2] == 3:
+            gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image_array
+
+        # Normalize grayscale to the full 0–255 range
+        normalized_gray = cv2.normalize(gray, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+
+        print(f"Normalized grayscale array: {normalized_gray.shape}, dtype={normalized_gray.dtype}")
+
+        # Automatically compute threshold if not provided
+        if threshold is None or isinstance(threshold, bool):  # Added explicit boolean check
+            otsu_threshold, _ = cv2.threshold(normalized_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            threshold = float(otsu_threshold)  # Ensure it is a float
+            self.status_message.emit(f"Using Otsu's threshold: {threshold:.2f}")
+            print(f"Otsu threshold computed: {threshold} (type: {type(threshold)})")
+        else:
+            print(f"Threshold provided: {threshold} (type: {type(threshold)})")
+
+        # Validate the threshold
+        if not isinstance(threshold, (float, int)):
+            print(f"Invalid threshold value: {threshold} (type: {type(threshold)})")
+            raise ValueError("Threshold must be a numeric value, not a boolean or invalid type.")
+
+        print(f"Final threshold to be used: {threshold} (type: {type(threshold)})")
+
+        # Apply the binary threshold filter
+        _, binary = cv2.threshold(normalized_gray, threshold, 255, cv2.THRESH_BINARY)
+
+        # Convert binary image back to RGB
+        binary_colored = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+        # Update the canvas
+        self.update_image_from_numpy(binary_colored)
+        self.status_message.emit("Binary Filter applied successfully.")
+
+    def apply_histogram_thresholding(self):
+        """Apply histogram-based thresholding."""
+        self.status_message.emit("Applying Histogram Thresholding...")
+        image_array = self.qimage_to_numpy(self.original_image)
+        print(f"Image shape: {image_array.shape}")
+        gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+        print(f"Gray shape: {gray.shape}, dtype: {gray.dtype}")
+        _, thresholded = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        print(f"Otsu's threshold value: {_}")
+        thresholded_colored = cv2.cvtColor(thresholded, cv2.COLOR_GRAY2BGR)  # Convert back to 3 channels
+        self.update_image_from_numpy(thresholded_colored)
+        self.update()
+
+    def qimage_to_numpy(self, qimage):
+        """Convert QImage to a NumPy array."""
+        qimage = qimage.convertToFormat(QImage.Format_RGB32)
+        width = qimage.width()
+        height = qimage.height()
+        ptr = qimage.bits()
+        ptr.setsize(qimage.byteCount())
+        array = np.array(ptr).reshape(height, width, 4)
+        return cv2.cvtColor(array, cv2.COLOR_BGRA2BGR)
+
+    def numpy_to_qimage(self, array):
+        """Convert a NumPy array to QImage."""
+        height, width, channel = array.shape
+        bytes_per_line = 3 * width
+        qimage = QImage(array.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        return qimage
+
+    def update_image_from_numpy(self, array):
+        """Update the QImage from a NumPy array."""
+        self.original_image = self.numpy_to_qimage(array)
+        self.image = self.original_image.scaled(
+            int(self.original_image.width() * self.current_scale),
+            int(self.original_image.height() * self.current_scale),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.update()
+
+    def set_brush_filter(self, filter_name):
+        """Set the active brush filter."""
+        self.brush_filter = filter_name
+        self.tool = 'filter_brush'
+        self.status_message.emit(f"Filter brush set to: {filter_name}")
+
+    def wheelEvent(self, event):
+        """Zoom in or out based on mouse wheel, using cursor position."""
+        if event.angleDelta().y() > 0:  # Zoom in
+            self.zoom_in(event.pos())
+        else:  # Zoom out
+            self.zoom_out(event.pos())
+
+    def zoom_in(self, cursor_pos=None):
+        """Zoom in on the canvas."""
+        self.current_scale *= 1.2
+        self.update_canvas_scale(cursor_pos)
+        self.status_message.emit("Zoomed In")
+
+    def zoom_out(self, cursor_pos=None):
+        """Zoom out on the canvas."""
+        self.current_scale *= 0.8
+        self.update_canvas_scale(cursor_pos)
+        self.status_message.emit("Zoomed Out")
+
+    def enable_text_tool(self):
+        """Enable the text tool for adding text to the canvas."""
+        self.text_tool_active = True
+        self.status_message.emit("Text tool activated. Click to add text.")
+
+    def add_text_at_position(self, position):
+        """Prompt user for text and render it on the canvas."""
+        text, ok = QInputDialog.getText(self, "Add Text", "Enter text:")
+        if ok and text:
+            painter = QPainter(self.original_image)
+            painter.setFont(self.text_font)
+            painter.setPen(QPen(self.text_color))
+            painter.drawText(position, text)
+            painter.end()
+
+            # Update the scaled image and repaint
+            self.image = self.original_image.scaled(
+                int(self.original_image.width() * self.current_scale),
+                int(self.original_image.height() * self.current_scale),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.update()
+            self.text_tool_active = False
+            self.status_message.emit("Text added.")
+
+    def set_text_font(self, font: QtGui.QFont):
+        """Set the font for the text tool."""
+        self.text_font = font
+        self.status_message.emit(f"Font set to: {font.family()}")
+
+    def set_text_color(self, color: QColor):
+        """Set the color for the text tool."""
+        self.text_color = color
+        self.status_message.emit(f"Text color set to: {color.name()}")
 
     def set_brush_texture(self, texture_name):
         """Set the texture for the brush."""
@@ -64,14 +264,27 @@ class Canvas(QWidget):
         self.brush_size = size
         self.update()  # Update the canvas to reflect any changes if necessary
 
-    def update_canvas_scale(self):
-        """Update the canvas scale and redraw the image."""
+    def update_canvas_scale(self, cursor_pos=None):
+        """Update the canvas scale and redraw the image, zooming into cursor position if provided."""
+        if cursor_pos:
+            cursor_pos = self.map_to_scaled_image(cursor_pos)
+            cursor_offset_x = (cursor_pos.x() * self.current_scale) - cursor_pos.x()
+            cursor_offset_y = (cursor_pos.y() * self.current_scale) - cursor_pos.y()
+        else:
+            cursor_offset_x, cursor_offset_y = 0, 0
+
         self.image = self.original_image.scaled(
             int(self.original_image.width() * self.current_scale),
             int(self.original_image.height() * self.current_scale),
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
+
+        self.offset_x -= cursor_offset_x
+        self.offset_y -= cursor_offset_y
+        self.offset_x = max(0, self.offset_x)
+        self.offset_y = max(0, self.offset_y)
+
         self.update()
 
     def set_eraser_size(self, size):
@@ -82,6 +295,13 @@ class Canvas(QWidget):
     def set_tool(self, tool):
         """Set the active tool (None for drawing, 'rect', 'lasso', 'polygon' for selection)."""
         self.tool = tool
+
+        if tool in ['rectangle', 'circle', 'triangle', 'line']:
+            self.current_shape = tool
+            self.status_message.emit(f"Shape tool set to: {tool}")
+        else:
+            self.current_shape = None
+
         self.selection_start = None
         self.selection_path = []
         self.drawing_selection = False
@@ -279,6 +499,12 @@ class Canvas(QWidget):
                 self.selection_path.append(pos)
                 self.drawing_selection = True
                 self.update()
+            elif self.text_tool_active:
+                self.add_text_at_position(pos)
+
+            elif self.current_shape:
+                self.selection_start = self.map_to_scaled_image(event.pos())
+
             elif self.tool == 'rect':
                 self.selection_start = pos
                 self.selection_path = [pos]
@@ -286,6 +512,10 @@ class Canvas(QWidget):
                 if not self.drawing_selection:
                     self.selection_path = [pos]
                 self.drawing_selection = True
+
+            elif self.tool == 'filter_brush' and event.button() == Qt.LeftButton:
+                self.drawing = True
+                self.last_point = pos
             elif self.tool in ['pencil', 'brush'] and event.button() == Qt.LeftButton:
                 self.drawing = True
                 self.last_point = pos
@@ -340,6 +570,44 @@ class Canvas(QWidget):
                 Qt.SmoothTransformation
             )
             self.update()
+        elif self.tool == 'filter_brush' and self.drawing:
+            x, y = pos.x(), pos.y()
+            brush_radius = self.filter_brush_size // 2
+            x_start, x_end = max(0, x - brush_radius), min(self.original_image.width(), x + brush_radius)
+            y_start, y_end = max(0, y - brush_radius), min(self.original_image.height(), y + brush_radius)
+
+            image_array = self.qimage_to_numpy(self.original_image)
+
+            # Apply the selected filter to the region
+            if self.brush_filter == "gaussian":
+                region = image_array[y_start:y_end, x_start:x_end]
+                image_array[y_start:y_end, x_start:x_end] = cv2.GaussianBlur(region, (15, 15), 0)
+            elif self.brush_filter == "sobel":
+                region = image_array[y_start:y_end, x_start:x_end]
+                gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+                sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+                sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+                sobel_combined = cv2.magnitude(sobelx, sobely)
+                max_val = np.max(sobel_combined)
+                if max_val > 0:
+                    sobel_combined = np.uint8(255 * sobel_combined / max_val)
+                else:
+                    sobel_combined = np.zeros_like(sobel_combined, dtype=np.uint8)
+                image_array[y_start:y_end, x_start:x_end] = cv2.cvtColor(sobel_combined, cv2.COLOR_GRAY2BGR)
+            elif self.brush_filter == "binary":
+                region = image_array[y_start:y_end, x_start:x_end]
+                gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+                _, binary = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
+                binary_colored = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+                # Apply only to non-white pixels in the original region
+                mask = np.any(region != [255, 255, 255], axis=-1)  # Detect non-white pixels
+                region[mask] = binary_colored[mask]
+                image_array[y_start:y_end, x_start:x_end] = region
+
+            # Update the image
+            self.update_image_from_numpy(image_array)
+            self.last_point = pos
         elif self.tool == 'erase' and self.drawing:
             painter = QPainter(self.original_image)
             pen = QPen(Qt.white, self.eraser_size, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
@@ -362,10 +630,47 @@ class Canvas(QWidget):
             self.drawing_selection = False
             self.finalize_selection()
 
+        if self.current_shape and self.selection_start:
+            end_pos = self.map_to_scaled_image(event.pos())
+            painter = QPainter(self.original_image)
+            pen = QPen(self.outline_color)
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.setBrush(QBrush(self.fill_color))
+
+            if self.current_shape == 'rectangle':
+                painter.drawRect(QRect(self.selection_start, end_pos))
+            elif self.current_shape == 'circle':
+                center = (self.selection_start + end_pos) / 2
+                radius = abs(self.selection_start.x() - end_pos.x()) // 2
+                painter.drawEllipse(center, radius, radius)
+            elif self.current_shape == 'line':
+                painter.drawLine(self.selection_start, end_pos)
+            elif self.current_shape == 'triangle':
+                # Draw a triangle using three points
+                points = [
+                    self.selection_start,
+                    QPoint(self.selection_start.x(), end_pos.y()),
+                    QPoint(end_pos.x(), end_pos.y())
+                ]
+                painter.drawPolygon(QPolygon(points))
+
+            painter.end()
+
+            # Update the canvas with the new shape
+            self.image = self.original_image.scaled(
+                int(self.original_image.width() * self.current_scale),
+                int(self.original_image.height() * self.current_scale),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self.update()
+            self.selection_start = None
+
         elif self.tool == 'polygon':
             self.drawing_selection = True
             self.update()
-        elif self.tool in ['pencil', 'brush', 'erase']:
+        elif self.tool in ['pencil', 'brush', 'erase', 'filter_brush']:
             self.drawing = False
         self.update()
 
